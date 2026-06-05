@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
@@ -308,16 +309,18 @@ Abaikan baris total, rekapitulasi utama, atau baris kosong yang tidak merepresen
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Starting server in DEVELOPMENT mode with Vite Middleware...");
+  const distPath = path.join(process.cwd(), "dist");
+  const hasBuiltAssets = fs.existsSync(distPath) && fs.existsSync(path.join(distPath, "index.html"));
+
+  if (process.env.NODE_ENV !== "production" || !hasBuiltAssets) {
+    console.log("Starting server with Vite Middleware (Live Development Mode)...");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    console.log("Starting server in PRODUCTION mode...");
-    const distPath = path.join(process.cwd(), "dist");
+    console.log("Starting server in PRODUCTION mode serving built static assets...");
     app.use(express.static(distPath));
     // SPA fallback
     app.get("*", (req, res) => {

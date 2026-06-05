@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account registration and configuration settings",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique Google user ID"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "CustomAhsp": {
+      "title": "Custom AHSP Job Analysis",
+      "description": "Custom designed Analysis of Job Unit Price (AHSP) created by the user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique custom AHSP identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Job description or work name"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Unit of work scale (e.g. m3, m2, m)"
+        },
+        "isCustom": {
+          "type": "boolean",
+          "description": "True if AI/user-generated"
+        },
+        "coefficients": {
+          "type": "array",
+          "description": "Materials and labor coefficients list"
+        },
+        "userId": {
+          "type": "string",
+          "description": "The owner of this custom template"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last edit timestamp"
+        }
+      },
+      "required": ["id", "name", "unit", "isCustom", "coefficients", "userId", "createdAt", "updatedAt"]
+    },
+    "CustomComponent": {
+      "title": "Custom Estimor Component",
+      "description": "Custom materials, labor types, or tools registered by the user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique component ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "Component label or description"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["bahan", "tenaga", "alat"],
+          "description": "Component category classification"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Pricing unit of scale"
+        },
+        "defaultPrice": {
+          "type": "number",
+          "description": "Rupiah price rate per units"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Creator of this component"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id", "name", "category", "unit", "defaultPrice", "userId", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "A collection containing registered user profiles"
+    },
+    "/custom_ahsp/{ahspId}": {
+      "schema": "CustomAhsp",
+      "description": "User generated or modified AHSP analyses"
+    },
+    "/custom_components/{componentId}": {
+      "schema": "CustomComponent",
+      "description": "User generated or modified component elements"
+    }
+  }
+}

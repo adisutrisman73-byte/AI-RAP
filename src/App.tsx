@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { 
   Sparkles, Brain, Search, Trash2, BookOpen, Layers, 
-  HelpCircle, ChevronRight, ChevronDown, CheckCircle, RefreshCw, FileSpreadsheet 
+  HelpCircle, ChevronRight, ChevronDown, CheckCircle, RefreshCw, FileSpreadsheet, Cloud 
 } from "lucide-react";
 import { AHSPItem, Component } from "./types";
 import { 
@@ -16,6 +16,19 @@ import {
 import AiAhspCreator from "./components/AiAhspCreator";
 import RabDocumentCompiler from "./components/RabDocumentCompiler";
 
+import { onAuthStateChanged, User } from "firebase/auth";
+import { 
+  auth, 
+  loginWithGoogle, 
+  logoutUser, 
+  saveCustomAhspToCloud, 
+  deleteCustomAhspFromCloud, 
+  saveCustomComponentToCloud, 
+  deleteCustomComponentFromCloud, 
+  subscribeCustomAhsps, 
+  subscribeCustomComponents 
+} from "./firebase";
+
 export default function App() {
   const [customAhspDatabase, setCustomAhspDatabase] = useState<AHSPItem[]>([]);
   const [customComponents, setCustomComponents] = useState<Component[]>([]);
@@ -24,36 +37,109 @@ export default function App() {
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"asisten" | "dokumen">("asisten");
 
-  // Load from localStorage on initialization
+  // Firebase auth status
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+
+  // Auth subscriber effect
   useEffect(() => {
-    const savedCustomAhsp = localStorage.getItem("rab_sh_custom_ahsp");
-    const savedCustomComponents = localStorage.getItem("rab_sh_custom_components");
-
-    if (savedCustomAhsp) {
-      try {
-        setCustomAhspDatabase(JSON.parse(savedCustomAhsp));
-      } catch (e) {
-        console.error("Error loading custom AHSP:", e);
-      }
-    }
-
-    if (savedCustomComponents) {
-      try {
-        setCustomComponents(JSON.parse(savedCustomComponents));
-      } catch (e) {
-        console.error("Error loading custom components:", e);
-      }
-    }
+    const unsub = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
+    return () => unsub();
   }, []);
 
-  // Save changes to localStorage on updates
+  // Sync state with Firestore or load from localStorage based on auth status
   useEffect(() => {
-    localStorage.setItem("rab_sh_custom_ahsp", JSON.stringify(customAhspDatabase));
-  }, [customAhspDatabase]);
+    if (authLoading) return;
+
+    if (user) {
+      setCloudSyncing(true);
+      
+      // Subscribe to Custom AHSPs in Cloud
+      const unsubAhsp = subscribeCustomAhsps(user.uid, async (cloudAhsps) => {
+        // Safe check: If cloud list is empty, but we have local items in localStorage, auto-migrate them
+        const localAhspsJson = localStorage.getItem("rab_sh_custom_ahsp");
+        if (cloudAhsps.length === 0 && localAhspsJson) {
+          try {
+            const localAhsps: AHSPItem[] = JSON.parse(localAhspsJson);
+            if (localAhsps.length > 0) {
+              for (const item of localAhsps) {
+                await saveCustomAhspToCloud(item, user.uid);
+              }
+            }
+          } catch (e) {
+            console.error("Failed to auto-sync local AHSPs to Cloud:", e);
+          }
+        }
+        setCustomAhspDatabase(cloudAhsps);
+        setCloudSyncing(false);
+      });
+
+      // Subscribe to Custom Components in Cloud
+      const unsubComp = subscribeCustomComponents(user.uid, async (cloudComponents) => {
+        // Auto-sync local custom components if cloud is empty
+        const localCompsJson = localStorage.getItem("rab_sh_custom_components");
+        if (cloudComponents.length === 0 && localCompsJson) {
+          try {
+            const localComps: Component[] = JSON.parse(localCompsJson);
+            if (localComps.length > 0) {
+              for (const item of localComps) {
+                await saveCustomComponentToCloud(item, user.uid);
+              }
+            }
+          } catch (e) {
+            console.error("Failed to auto-sync local Components to Cloud:", e);
+          }
+        }
+        setCustomComponents(cloudComponents);
+      });
+
+      return () => {
+        unsubAhsp();
+        unsubComp();
+      };
+    } else {
+      // Guest local-only mode: load from localStorage
+      const savedCustomAhsp = localStorage.getItem("rab_sh_custom_ahsp");
+      const savedCustomComponents = localStorage.getItem("rab_sh_custom_components");
+
+      if (savedCustomAhsp) {
+        try {
+          setCustomAhspDatabase(JSON.parse(savedCustomAhsp));
+        } catch (e) {
+          console.error("Error loading custom AHSP from localStorage:", e);
+        }
+      } else {
+        setCustomAhspDatabase([]);
+      }
+
+      if (savedCustomComponents) {
+        try {
+          setCustomComponents(JSON.parse(savedCustomComponents));
+        } catch (e) {
+          console.error("Error loading custom components from localStorage:", e);
+        }
+      } else {
+        setCustomComponents([]);
+      }
+    }
+  }, [user, authLoading]);
+
+  // Back-save change events to localStorage ONLY if signed out (preventing clean client overrides)
+  useEffect(() => {
+    if (!user) {
+      localStorage.setItem("rab_sh_custom_ahsp", JSON.stringify(customAhspDatabase));
+    }
+  }, [customAhspDatabase, user]);
 
   useEffect(() => {
-    localStorage.setItem("rab_sh_custom_components", JSON.stringify(customComponents));
-  }, [customComponents]);
+    if (!user) {
+      localStorage.setItem("rab_sh_custom_components", JSON.stringify(customComponents));
+    }
+  }, [customComponents, user]);
 
   // Combine standard PUPR and AI-generated AHSPs
   const fullAhspDatabase = useMemo(() => {
@@ -66,25 +152,46 @@ export default function App() {
   }, [customComponents]);
 
   // Handle adding custom items from AI generator
-  const handleAddCustomAhsp = (newItem: AHSPItem, newComponents: Component[]) => {
-    setCustomAhspDatabase((prev) => {
-      if (prev.some((a) => a.id === newItem.id)) return prev;
-      return [newItem, ...prev]; // Put new AI generation at the top
-    });
+  const handleAddCustomAhsp = async (newItem: AHSPItem, newComponents: Component[]) => {
+    if (user) {
+      // Sync straight to Cloud Firestore DB
+      try {
+        await saveCustomAhspToCloud(newItem, user.uid);
+        for (const comp of newComponents) {
+          await saveCustomComponentToCloud(comp, user.uid);
+        }
+      } catch (err) {
+        console.error("Failure submitting new AI designed work analyzing to Firebase:", err);
+      }
+    } else {
+      // Fast fallback state mapping for guest modes
+      setCustomAhspDatabase((prev) => {
+        if (prev.some((a) => a.id === newItem.id)) return prev;
+        return [newItem, ...prev]; // Put new AI generation at the top
+      });
 
-    setCustomComponents((prev) => {
-      const filtered = newComponents.filter((c) => !prev.some((existing) => existing.id === c.id));
-      return [...prev, ...filtered];
-    });
+      setCustomComponents((prev) => {
+        const filtered = newComponents.filter((c) => !prev.some((existing) => existing.id === c.id));
+        return [...prev, ...filtered];
+      });
+    }
 
     // Auto-select/expand the newly designed item to inspect details
     setExpandedItemId(newItem.id);
   };
 
   // Handle deleting a custom designed AHSP item
-  const handleDeleteCustomAhsp = (id: string) => {
+  const handleDeleteCustomAhsp = async (id: string) => {
     if (confirm("Hapus item analisa draf kustom ini dari pustaka Anda?")) {
-      setCustomAhspDatabase((prev) => prev.filter((a) => a.id !== id));
+      if (user) {
+        try {
+          await deleteCustomAhspFromCloud(id);
+        } catch (err) {
+          console.error("Failure removing custom item from Firestore:", err);
+        }
+      } else {
+        setCustomAhspDatabase((prev) => prev.filter((a) => a.id !== id));
+      }
       if (expandedItemId === id) setExpandedItemId(null);
     }
   };
@@ -139,11 +246,51 @@ export default function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-2.5">
-            <span className="text-xs text-slate-400">Total Pustaka Aktif:</span>
-            <span className="px-3 py-1 bg-slate-950 rounded-lg text-xs font-mono font-bold text-blue-400 border border-slate-800">
-              {stats.totalItems} Analisa
-            </span>
+          <div className="flex flex-col sm:flex-row items-center gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xs text-slate-400">Total Pustaka Aktif:</span>
+              <span className="px-3 py-1 bg-slate-950 rounded-lg text-xs font-mono font-bold text-blue-400 border border-slate-800">
+                {stats.totalItems} Analisa
+              </span>
+            </div>
+
+            {/* Firebase cloud sign-in and sync state indicators */}
+            {authLoading ? (
+              <div className="h-8 w-24 bg-slate-800 rounded-lg animate-pulse"></div>
+            ) : user ? (
+              <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl p-1.5 pr-2.5">
+                <div className="w-6 h-6 rounded-full bg-blue-600 text-white font-extrabold text-[10px] flex items-center justify-center uppercase overflow-hidden">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt={user.displayName || ""} className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
+                  ) : (
+                    user.displayName ? user.displayName.substring(0, 2) : "US"
+                  )}
+                </div>
+                <div className="text-left select-text max-w-[125px]">
+                  <p className="text-[10px] font-bold text-white leading-none truncate">{user.displayName || "Pengguna Cloud"}</p>
+                  <span className="text-[8px] text-emerald-400 font-medium flex items-center gap-0.5 mt-0.5">
+                    <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Cloud Backup Aktif
+                  </span>
+                </div>
+                <button
+                  onClick={logoutUser}
+                  className="text-[9px] text-slate-400 hover:text-red-400 hover:bg-slate-900 px-2 py-1 rounded font-bold uppercase transition ml-1 cursor-pointer"
+                  title="Keluar"
+                >
+                  Keluar
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={loginWithGoogle}
+                className="flex items-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-[10px] font-extrabold px-3.5 py-2 rounded-xl transition border border-blue-500/50 shadow-md uppercase tracking-wider cursor-pointer"
+                title="Masuk dengan akun Google untuk sinkronisasi draf analisa sipil Anda di awan"
+              >
+                <Cloud className="w-3.5 h-3.5" />
+                Sync Cloud (Google)
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -257,9 +404,19 @@ export default function App() {
               {/* Clear Custom Items action if there are any */}
               {customAhspDatabase.length > 0 && (
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (confirm("Reset seluruh data analisa kustom rancangan AI?")) {
-                      setCustomAhspDatabase([]);
+                      if (user) {
+                        try {
+                          for (const item of customAhspDatabase) {
+                            await deleteCustomAhspFromCloud(item.id);
+                          }
+                        } catch (err) {
+                          console.error("Failure clearing cloud custom elements:", err);
+                        }
+                      } else {
+                        setCustomAhspDatabase([]);
+                      }
                       setExpandedItemId(null);
                     }
                   }}

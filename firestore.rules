@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safetynet - Default Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Global helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      // In development env we can look at request.auth.token.email_verified == true
+      // or simply rely on isSignedIn() if the user is verified or auth is populated.
+      // We check email_verified dynamically to prevent spoofing
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == "google.com");
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity validator: User
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128
+          && data.email is string && data.email.size() <= 200
+          && data.createdAt == request.time;
+    }
+
+    // Entity validator: CustomAhsp
+    function isValidCustomAhsp(data) {
+      return data.id is string && data.id.size() <= 128
+          && data.name is string && data.name.size() <= 500
+          && data.unit is string && data.unit.size() <= 50
+          && data.isCustom == true
+          && data.userId == request.auth.uid
+          && data.coefficients is list
+          && data.coefficients.size() <= 100; // Max 100 coefficients per job
+    }
+
+    // Entity validator: CustomComponent
+    function isValidCustomComponent(data) {
+      return data.id is string && data.id.size() <= 128
+          && data.name is string && data.name.size() <= 500
+          && (data.category == "bahan" || data.category == "tenaga" || data.category == "alat")
+          && data.unit is string && data.unit.size() <= 50
+          && data.defaultPrice is number && data.defaultPrice >= 0
+          && data.userId == request.auth.uid;
+    }
+
+    // Matches
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming())
+                       && incoming().uid == existing().uid
+                       && incoming().createdAt == existing().createdAt;
+    }
+
+    match /custom_ahsp/{ahspId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isEmailVerified() && isValidId(ahspId) && isValidCustomAhsp(incoming())
+                       && incoming().id == ahspId
+                       && incoming().createdAt == request.time
+                       && incoming().updatedAt == request.time;
+                       
+      allow update: if isEmailVerified() && isValidId(ahspId) && isValidCustomAhsp(incoming())
+                       && incoming().id == existing().id
+                       && incoming().userId == existing().userId
+                       && incoming().createdAt == existing().createdAt
+                       && incoming().updatedAt == request.time;
+                       
+      allow delete: if isEmailVerified() && isValidId(ahspId) && existing().userId == request.auth.uid;
+    }
+
+    match /custom_components/{componentId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isEmailVerified() && isValidId(componentId) && isValidCustomComponent(incoming())
+                       && incoming().id == componentId
+                       && incoming().createdAt == request.time
+                       && incoming().updatedAt == request.time;
+                       
+      allow update: if isEmailVerified() && isValidId(componentId) && isValidCustomComponent(incoming())
+                       && incoming().id == existing().id
+                       && incoming().userId == existing().userId
+                       && incoming().createdAt == existing().createdAt
+                       && incoming().updatedAt == request.time;
+                       
+      allow delete: if isEmailVerified() && isValidId(componentId) && existing().userId == request.auth.uid;
+    }
+  }
+}
