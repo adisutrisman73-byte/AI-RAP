@@ -503,7 +503,7 @@ export default function RabDocumentCompiler({
 
       ahsp.coefficients.forEach((coef) => {
         const comp = fullComponentsDatabase.find(c => c.id === coef.componentId);
-        if (!comp) return;
+        if (!comp || comp.category !== "bahan") return;
 
         const totalComponentVolume = item.volume * coef.coefficient;
 
@@ -520,7 +520,7 @@ export default function RabDocumentCompiler({
       });
     });
 
-    return Object.values(quantities);
+    return Object.values(quantities).filter(m => m.category === "bahan");
   }, [parsedItems, fullAhspDatabase, fullComponentsDatabase]);
 
   // Rupiah currency formatter
@@ -584,7 +584,6 @@ export default function RabDocumentCompiler({
   const calculateCategoryTotals = (rows: any[]) => {
     let totalJumlahHarga = 0;
     let totalRapBahan = 0;
-    let totalRapUpah = 0;
     let totalMarginNominal = 0;
     let marginPctSum = 0;
 
@@ -593,7 +592,6 @@ export default function RabDocumentCompiler({
       const itemMarginPct = item.marginPct !== undefined ? item.marginPct : globalMarginPct;
       
       let rapBahanUnit = 0;
-      let rapUpahUnit = 0;
 
       if (assignedAhsp) {
         assignedAhsp.coefficients.forEach((coef) => {
@@ -603,18 +601,15 @@ export default function RabDocumentCompiler({
           
           if (comp.category === "bahan") {
             rapBahanUnit += coef.coefficient * price;
-          } else {
-            rapUpahUnit += coef.coefficient * price;
           }
         });
       }
 
-      const unitCost = rapBahanUnit + rapUpahUnit;
+      const unitCost = rapBahanUnit;
       const sellingUnitPrice = unitCost * (1 + itemMarginPct / 100);
       
       totalJumlahHarga += sellingUnitPrice * item.volume;
       totalRapBahan += rapBahanUnit * item.volume;
-      totalRapUpah += rapUpahUnit * item.volume;
       totalMarginNominal += (sellingUnitPrice - unitCost) * item.volume;
       marginPctSum += itemMarginPct;
     });
@@ -622,7 +617,7 @@ export default function RabDocumentCompiler({
     return {
       totalJumlahHarga,
       totalRapBahan,
-      totalRapUpah,
+      totalRapUpah: 0,
       totalMarginNominal,
       averageMarginPct: rows.length > 0 ? marginPctSum / rows.length : 0
     };
@@ -985,7 +980,7 @@ export default function RabDocumentCompiler({
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Kebutuhan Bahan Utama:</span>
-                    <div className="divide-y divide-slate-150 bg-white border border-slate-200 rounded-lg overflow-hidden max-h-[250px] overflow-y-auto">
+                    <div className="divide-y divide-slate-150 bg-white border border-slate-200 rounded-lg overflow-hidden max-h-[400px] overflow-y-auto">
                       {compiledProjectMaterials
                         .filter(m => m.category === "bahan")
                         .map((material, idx) => (
@@ -998,40 +993,6 @@ export default function RabDocumentCompiler({
                       ))}
                     </div>
                   </div>
-
-                  <div className="space-y-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Kebutuhan Tenaga Kerja murni (OH):</span>
-                    <div className="divide-y divide-slate-150 bg-white border border-slate-200 rounded-lg overflow-hidden">
-                      {compiledProjectMaterials
-                        .filter(m => m.category === "tenaga")
-                        .map((labor, idx) => (
-                          <div key={idx} className="p-2.5 flex items-center justify-between gap-4 text-xs">
-                            <span className="font-medium text-slate-800">{labor.name}</span>
-                            <span className="font-mono font-bold text-blue-900 whitespace-nowrap bg-blue-50 border border-blue-200 rounded px-2 py-0.5">
-                              {labor.quantity.toFixed(2)} {labor.unit}
-                            </span>
-                          </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {compiledProjectMaterials.some(m => m.category === "alat") && (
-                    <div className="space-y-2">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Kebutuhan Sewa Alat Konstruksi:</span>
-                      <div className="divide-y divide-slate-150 bg-white border border-slate-200 rounded-lg overflow-hidden">
-                        {compiledProjectMaterials
-                          .filter(m => m.category === "alat")
-                          .map((tool, idx) => (
-                            <div key={idx} className="p-2.5 flex items-center justify-between gap-4 text-xs">
-                              <span className="font-medium text-slate-800">{tool.name}</span>
-                              <span className="font-mono font-bold text-purple-950 whitespace-nowrap bg-purple-50 border border-purple-200 rounded px-2 py-0.5">
-                                {tool.quantity.toFixed(2)} {tool.unit}
-                              </span>
-                            </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
                   <div className="pt-3 border-t border-slate-200">
                     <button
@@ -1093,13 +1054,10 @@ export default function RabDocumentCompiler({
                     <th className="py-2.5 px-3 border-r border-slate-300 text-right w-36" rowSpan={2}>Harga Satuan Jual (RAB)</th>
                     <th className="py-2.5 px-3 border-r border-slate-300 text-right w-40" rowSpan={2}>Harga Penawaran Total (RAB)</th>
                     <th className="py-1.5 px-3 border-r border-slate-300 text-center text-[9px]" colSpan={2}>Anggaran Fisik Bahan (RAP)</th>
-                    <th className="py-1.5 px-3 border-r border-slate-300 text-center text-[9px]" colSpan={2}>Anggaran Fisik Upah/Alat (RAP)</th>
                     <th className="py-0.5 px-3 text-center text-[9px]" colSpan={2}>Profit & Overhead Margin</th>
                   </tr>
                   {/* Row 2 Sub-Headers */}
                   <tr className="bg-slate-50 text-slate-600 text-[9px] font-extrabold uppercase border-b border-slate-300">
-                    <th className="py-2 px-2 border-r border-slate-300 text-right w-32">Harga Satuan</th>
-                    <th className="py-2 px-2 border-r border-slate-300 text-right w-36">Jumlah Harga</th>
                     <th className="py-2 px-2 border-r border-slate-300 text-right w-32">Harga Satuan</th>
                     <th className="py-2 px-2 border-r border-slate-300 text-right w-36">Jumlah Harga</th>
                     <th className="py-2 px-2 border-r border-slate-300 text-right w-32">Nominal (Margin)</th>
@@ -1125,8 +1083,6 @@ export default function RabDocumentCompiler({
                           <td className="py-3 px-3 border-r border-slate-300 text-right font-mono text-slate-950 font-black">{rp(totals.totalJumlahHarga)}</td>
                           <td className="py-3 px-2 border-r border-slate-300 text-right font-mono text-slate-550"></td>
                           <td className="py-3 px-2 border-r border-slate-300 text-right font-mono text-slate-705 font-bold">{rp(totals.totalRapBahan)}</td>
-                          <td className="py-3 px-2 border-r border-slate-300 text-right font-mono text-slate-550"></td>
-                          <td className="py-3 px-2 border-r border-slate-300 text-right font-mono text-slate-705 font-bold">{rp(totals.totalRapUpah)}</td>
                           <td className="py-3 px-2 border-r border-slate-300 text-right font-mono text-emerald-850 font-black">{rp(totals.totalMarginNominal)}</td>
                           <td className="py-3 px-2 text-center font-mono text-blue-900 bg-slate-100 font-black">{totals.averageMarginPct.toFixed(2)}%</td>
                         </tr>
@@ -1139,28 +1095,21 @@ export default function RabDocumentCompiler({
                           const itemMarginPct = item.marginPct !== undefined ? item.marginPct : globalMarginPct;
                           
                           let rapBahanUnit = 0;
-                          let rapUpahUnit = 0;
 
                           if (assignedAhsp) {
                             assignedAhsp.coefficients.forEach((coef) => {
                               const comp = fullComponentsDatabase.find(c => c.id === coef.componentId);
-                              if (!comp) return;
+                              if (!comp || comp.category !== "bahan") return;
                               const price = comp.defaultPrice || 0;
-                              
-                              if (comp.category === "bahan") {
-                                rapBahanUnit += coef.coefficient * price;
-                              } else {
-                                rapUpahUnit += coef.coefficient * price;
-                              }
+                              rapBahanUnit += coef.coefficient * price;
                             });
                           }
 
-                          const unitCost = rapBahanUnit + rapUpahUnit;
+                          const unitCost = rapBahanUnit;
                           const sellingUnitPrice = unitCost * (1 + itemMarginPct / 100);
                           
                           const jumlahHargaSelling = sellingUnitPrice * item.volume;
                           const rapBahanJumlah = rapBahanUnit * item.volume;
-                          const rapUpahJumlah = rapUpahUnit * item.volume;
                           const marginNominalJumlah = (sellingUnitPrice - unitCost) * item.volume;
 
                           return (
@@ -1211,9 +1160,6 @@ export default function RabDocumentCompiler({
                                 <td className="py-2.5 px-2 border-r border-slate-200 text-right font-mono text-slate-450">{rp(rapBahanUnit)}</td>
                                 <td className="py-2.5 px-2 border-r border-slate-200 text-right font-mono text-slate-800 font-semibold">{rp(rapBahanJumlah)}</td>
                                 
-                                <td className="py-2.5 px-2 border-r border-slate-200 text-right font-mono text-slate-455">{rp(rapUpahUnit)}</td>
-                                <td className="py-2.5 px-2 border-r border-slate-200 text-right font-mono text-slate-850 font-semibold">{rp(rapUpahJumlah)}</td>
-                                
                                 <td className="py-2.5 px-2 border-r border-slate-200 text-right font-mono font-bold text-emerald-800 bg-emerald-50/10">{rp(marginNominalJumlah)}</td>
                                 
                                 {/* Editable custom margin override per row cell */}
@@ -1234,12 +1180,11 @@ export default function RabDocumentCompiler({
                               {/* ORANGE NESTED BREAKDOWNS OF INDIVIDUAL COEF */}
                               {assignedAhsp && assignedAhsp.coefficients.map((coef, cIdx) => {
                                 const comp = fullComponentsDatabase.find(c => c.id === coef.componentId);
-                                if (!comp) return null;
+                                if (!comp || comp.category !== "bahan") return null;
 
                                 const componentQuantity = coef.coefficient * item.volume;
                                 const componentPrice = comp.defaultPrice || 0;
                                 const componentSum = componentQuantity * componentPrice;
-                                const isMaterial = comp.category === "bahan";
 
                                 return (
                                   <tr key={`comp-${cIdx}`} className="border-b border-slate-100 bg-orange-50/10 text-[10px] font-bold text-orange-600/90 italic hover:bg-orange-50/20 select-none">
@@ -1259,18 +1204,10 @@ export default function RabDocumentCompiler({
                                     
                                     {/* Materials Left Pricing */}
                                     <td className="py-1.5 px-2 border-r border-slate-200 text-right font-mono font-medium">
-                                      {isMaterial ? rp(componentPrice) : "-"}
+                                      {rp(componentPrice)}
                                     </td>
                                     <td className="py-1.5 px-2 border-r border-slate-200 text-right font-mono">
-                                      {isMaterial ? rp(componentSum) : "-"}
-                                    </td>
-                                    
-                                    {/* Labor/Tools Pricing */}
-                                    <td className="py-1.5 px-2 border-r border-slate-200 text-right font-mono font-medium font-bold">
-                                      {!isMaterial ? rp(componentPrice) : "-"}
-                                    </td>
-                                    <td className="py-1.5 px-2 border-r border-slate-200 text-right font-mono">
-                                      {!isMaterial ? rp(componentSum) : "-"}
+                                      {rp(componentSum)}
                                     </td>
                                     
                                     <td className="py-1.5 px-2 border-r border-slate-200 text-right"></td>
@@ -1296,9 +1233,8 @@ export default function RabDocumentCompiler({
     {/* PRINT-ONLY OFFICIAL FORMATTED QUANTITY STUDY REPORT */}
     {currentStep === "workspace" && (
       <div className="hidden print:block bg-white text-black font-sans p-2 space-y-8 print:w-full w-full" id="document-compiler-print-report">
-        {/* KOP SURAT LAPORAN */}
         <div className="text-center space-y-2 border-b-4 border-double border-black pb-4">
-          <h1 className="text-xl font-black uppercase tracking-tight">Laporan Rekapitulasi Kuantitas Bahan, Tenaga & Alat</h1>
+          <h1 className="text-xl font-black uppercase tracking-tight">Laporan Rekapitulasi Kuantitas Bahan (Material)</h1>
           <h2 className="text-sm font-semibold uppercase text-slate-700 tracking-wide">Penyelarasan Nilai Koefisien Analisis Harga Satuan Pekerjaan (AHSP) PUPR</h2>
           <p className="text-[10px] text-slate-500 italic">Berdasarkan Standar Peraturan Menteri PUPR No. 1/PRT/M/2022 & Perhitungan Pintar AI</p>
         </div>
@@ -1353,19 +1289,19 @@ export default function RabDocumentCompiler({
 
         {/* BAGIAN 2: REKAPITULASI KEBUTUHAN SUMBER DAYA TOTAL */}
         <div className="space-y-4 pt-4 page-break-before">
-          <h3 className="text-xs font-black uppercase tracking-wider border-l-4 border-black pl-2">BAGIAN II. Ringkasan Kebutuhan Volume Murni Bahan & Tenaga Kerja</h3>
+          <h3 className="text-xs font-black uppercase tracking-wider border-l-4 border-black pl-2">BAGIAN II. Ringkasan Kebutuhan Volume Murni Bahan (Material)</h3>
           
-          <div className="grid grid-cols-2 gap-6 pb-4">
-            {/* KOLOM BAHAN */}
+          <div className="pb-4">
+            {/* KOLOM BAHAN TOTAL */}
             <div className="space-y-2">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">A. Kebutuhan Bahan Utama (Material)</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-700 block">Kebutuhan Bahan Utama (Material)</span>
               <table className="w-full text-left border-collapse border border-black text-xs">
                 <thead>
-                  <tr className="bg-slate-100 border-b border-black font-bold uppercase text-[9px]">
-                    <th className="py-1 px-2 border border-black text-center w-10">No</th>
-                    <th className="py-1 px-2 border border-black">Deskripsi Material/Bahan</th>
-                    <th className="py-1 px-2 border border-black text-right w-24">Kuantitas</th>
-                    <th className="py-1 px-2 border border-black text-center w-12">Sat</th>
+                  <tr className="bg-slate-105 border-b border-black font-bold uppercase text-[9px] text-slate-800">
+                    <th className="py-2 px-2 border border-black text-center w-12">No</th>
+                    <th className="py-2 px-3 border border-black">Deskripsi Material/Bahan Utama</th>
+                    <th className="py-2 px-3 border border-black text-right w-36">Kuantitas Total</th>
+                    <th className="py-2 px-3 border border-black text-center w-20">Satuan</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1377,85 +1313,18 @@ export default function RabDocumentCompiler({
                     compiledProjectMaterials
                       .filter(m => m.category === "bahan")
                       .map((material, idx) => (
-                        <tr key={idx} className="border-b border-black text-[11px]">
-                          <td className="py-1 px-2 border border-black text-center font-mono">{idx + 1}</td>
-                          <td className="py-1 px-2 border border-black">{material.name}</td>
-                          <td className="py-1 px-2 border border-black text-right font-mono font-bold text-slate-900">
+                        <tr key={idx} className="border-b border-black text-[11px] font-medium leading-relaxed font-sans">
+                          <td className="py-2 px-2 border border-black text-center font-mono">{idx + 1}</td>
+                          <td className="py-2 px-3 border border-black font-semibold text-slate-900">{material.name}</td>
+                          <td className="py-2 px-3 border border-black text-right font-mono font-black text-slate-950">
                             {material.quantity.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 3 })}
                           </td>
-                          <td className="py-1 px-2 border border-black text-center font-mono">{material.unit}</td>
+                          <td className="py-2 px-3 border border-black text-center font-bold text-slate-700">{material.unit}</td>
                         </tr>
                       ))
                   )}
                 </tbody>
               </table>
-            </div>
-
-            {/* KOLOM TENAGA & ALAT */}
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-550 block">B. Kebutuhan Tenaga Kerja Pekerja (OH)</span>
-                <table className="w-full text-left border-collapse border border-black text-xs">
-                  <thead>
-                    <tr className="bg-slate-100 border-b border-black font-bold uppercase text-[9px]">
-                      <th className="py-1 px-2 border border-black text-center w-10">No</th>
-                      <th className="py-1 px-2 border border-black">Klasifikasi Tenaga Kerja</th>
-                      <th className="py-1 px-2 border border-black text-right w-24">Kuantitas (OH)</th>
-                      <th className="py-1 px-2 border border-black text-center w-12">Sat</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compiledProjectMaterials.filter(m => m.category === "tenaga").length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-3 px-2 border border-black text-center text-slate-400 italic">Tidak ada tenaga kerja terakumulasi</td>
-                      </tr>
-                    ) : (
-                      compiledProjectMaterials
-                        .filter(m => m.category === "tenaga")
-                        .map((labor, idx) => (
-                          <tr key={idx} className="border-b border-black text-[11px]">
-                            <td className="py-1 px-2 border border-black text-center font-mono">{idx + 1}</td>
-                            <td className="py-1 px-2 border border-black">{labor.name}</td>
-                            <td className="py-1 px-2 border border-black text-right font-mono font-bold text-slate-900">
-                              {labor.quantity.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 3 })}
-                            </td>
-                            <td className="py-1 px-2 border border-black text-center font-mono">{labor.unit}</td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {compiledProjectMaterials.some(m => m.category === "alat") && (
-                <div className="space-y-2">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-550 block">C. Kebutuhan Sewa Alat Konstruksi</span>
-                  <table className="w-full text-left border-collapse border border-black text-xs">
-                    <thead>
-                      <tr className="bg-slate-100 border-b border-black font-bold uppercase text-[9px]">
-                        <th className="py-1 px-2 border border-black text-center w-10">No</th>
-                        <th className="py-1 px-2 border border-black">Deskripsi Alat Kerja</th>
-                        <th className="py-1 px-2 border border-black text-right w-24">Kuantitas</th>
-                        <th className="py-1 px-2 border border-black text-center w-12">Sat</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {compiledProjectMaterials
-                        .filter(m => m.category === "alat")
-                        .map((tool, idx) => (
-                          <tr key={idx} className="border-b border-black text-[11px]">
-                            <td className="py-1 px-2 border border-black text-center font-mono">{idx + 1}</td>
-                            <td className="py-1 px-2 border border-black">{tool.name}</td>
-                            <td className="py-1 px-2 border border-black text-right font-mono font-bold text-slate-900">
-                              {tool.quantity.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 3 })}
-                            </td>
-                            <td className="py-1 px-2 border border-black text-center font-mono">{tool.unit}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
           </div>
         </div>
