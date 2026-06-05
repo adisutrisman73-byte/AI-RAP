@@ -1,0 +1,6 @@
+{
+  "name": "Analisa AHSP Pintar AI",
+  "description": "Sistem perancang dan penganalisa koefisien AHSP PUPR pintar bertenaga AI untuk menyusun indeks komponen bahan, tenaga, dan alat konstruksi otomatis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
