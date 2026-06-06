@@ -19,17 +19,22 @@ const ai = new GoogleGenAI({
   },
 });
 
+// Dynamic, self-healing Gemini model pool to handle rate-limits and quotas gracefully
+let modelsToTry = [
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+];
+
 // Resilient Gemini generator helper with retry & fallback
 async function generateContentWithRetry(params: any): Promise<any> {
-  const modelsToTry = [
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
-    "gemini-3.1-flash-lite",
-  ];
   const maxRetries = 3;
   let lastError: any = null;
 
-  for (const modelName of modelsToTry) {
+  // Clone current list to prevent concurrent request race conditions
+  const currentModels = [...modelsToTry];
+
+  for (const modelName of currentModels) {
     let attempt = 0;
     while (attempt < maxRetries) {
       try {
@@ -38,12 +43,44 @@ async function generateContentWithRetry(params: any): Promise<any> {
           ...params,
           model: modelName,
         });
+
+        // SUCCESS! Promote this model to the top of our pool for future requests
+        const idx = modelsToTry.indexOf(modelName);
+        if (idx > 0) {
+          console.log(`[Gemini] Promoting successful model "${modelName}" to the top of the preference pool.`);
+          modelsToTry.splice(idx, 1);
+          modelsToTry.unshift(modelName);
+        }
+
         return response;
       } catch (err: any) {
         attempt++;
         lastError = err;
         console.warn(`[Gemini] Attempt ${attempt} failed for ${modelName}. Error: ${err.message || err}`);
         
+        // Detect 429 Rate Limit / Quota Exceeded / Resource Exhausted
+        const isQuotaError = 
+          err.status === 429 || 
+          (err.message && (
+            err.message.includes("quota") || 
+            err.message.includes("Quota") || 
+            err.message.includes("RESOURCE_EXHAUSTED") || 
+            err.message.includes("429")
+          ));
+
+        if (isQuotaError) {
+          console.warn(`[Gemini] Model "${modelName}" hit quota limit. Skipping remaining attempts to avoid timeouts and switching models.`);
+          
+          // Depromote this model in the pool so future queries don't waste time on it
+          const idx = modelsToTry.indexOf(modelName);
+          if (idx !== -1) {
+            modelsToTry.splice(idx, 1);
+            modelsToTry.push(modelName); // Move to the end
+          }
+          
+          break; // Break current prompt's retry-loop for this model and try the next model
+        }
+
         if (attempt < maxRetries) {
           const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -308,11 +345,28 @@ Abaikan baris total, rekapitulasi utama, atau baris kosong yang tidak merepresen
     res.json({ status: "ok", time: new Date().toISOString() });
   });
 
-  // Vite middleware for development
+  // Vite middleware / static files paths configuration
   const distPath = path.join(process.cwd(), "dist");
-  const hasBuiltAssets = fs.existsSync(distPath) && fs.existsSync(path.join(distPath, "index.html"));
 
-  if (process.env.NODE_ENV !== "production" || !hasBuiltAssets) {
+  // Determine if we are in development mode by checking if we are NOT running the compiled production bundle
+  const isDevMode = 
+    !process.argv[1] || 
+    !process.argv[1].endsWith("server.cjs");
+
+  // Debug environment endpoint
+  app.get("/api/env-debug", (req, res) => {
+    res.json({
+      nodeEnv: process.env.NODE_ENV,
+      argv: process.argv,
+      isDevMode,
+      distPath,
+      hasServerCjs: fs.existsSync(path.join(distPath, "server.cjs")),
+      hasIndexHtml: fs.existsSync(path.join(distPath, "index.html")),
+      disableHmr: process.env.DISABLE_HMR,
+    });
+  });
+
+  if (isDevMode) {
     console.log("Starting server with Vite Middleware (Live Development Mode)...");
     const vite = await createViteServer({
       server: { middlewareMode: true },

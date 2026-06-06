@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import * as XLSX from "xlsx";
 import { 
   FileText, Upload, Sparkles, Brain, CheckCircle, RefreshCw, 
   HelpCircle, ChevronRight, Grid, Package, Layers, Plus, 
@@ -145,12 +146,32 @@ export default function RabDocumentCompiler({
   // Convert uploaded file to base64 string
   const getBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
+      if (!file) {
+        reject(new Error("Berkas tidak ditemukan."));
+        return;
+      }
+      if (file.size === 0) {
+        reject(new Error("Berkas koson (0 byte) tidak dapat diproses."));
+        return;
+      }
+      
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onload = () => {
         const resultString = reader.result as string;
-        // Strip out metadata prefix (e.g., "data:application/pdf;base64,")
-        const base64Content = resultString.split(",")[1];
+        if (!resultString) {
+          reject(new Error("Isi berkas tidak terbaca atau kosong."));
+          return;
+        }
+
+        const parts = resultString.split(",");
+        const base64Content = parts.length > 1 ? parts[1] : parts[0];
+
+        if (!base64Content || base64Content.trim() === "") {
+          reject(new Error("Gagal mengambil data base64 dari berkas."));
+          return;
+        }
+
         resolve(base64Content);
       };
       reader.onerror = (error) => reject(error);
@@ -191,6 +212,10 @@ export default function RabDocumentCompiler({
     const fileExtension = uploadedFile.name.split(".").pop()?.toLowerCase();
     
     if (validTypes.includes(uploadedFile.type) || ["xlsx", "xls", "pdf", "csv"].includes(fileExtension || "")) {
+      if (uploadedFile.size === 0) {
+        setErrorMessage("Berkas kosong (0 byte) tidak dapat diproses.");
+        return;
+      }
       setFile(uploadedFile);
       setErrorMessage(null);
     } else {
@@ -489,6 +514,199 @@ export default function RabDocumentCompiler({
       setErrorMessage(`Otomatisasi selesai dengan beberapa kesalahan. Berhasil disinkronkan: ${successCount} item. Gagal: ${failCount} item.`);
     } else {
       setErrorMessage(null);
+    }
+  };
+
+  // Export all analysis, pricing, and margin workspace results to Excel Worksheet
+  const handleExportSpreadsheet = () => {
+    try {
+      const rabRows: any[] = [];
+      
+      // Header & Metadata
+      rabRows.push(["LAPORAN PENYELARASAN DOKUMEN RAB & ANALISA VOLUME PINTAR"]);
+      rabRows.push([`Nama File Sumber: ${file?.name || "Rencana Desain Manual / Tanpa Berkas"}`]);
+      rabRows.push([`Metode Analisis: BoQ Quantity Surveying (QS) Engine`]);
+      rabRows.push([`Tanggal Unduh: ${new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`]);
+      rabRows.push([`Global Markup Profit & Overhead: ${globalMarginPct}%`]);
+      rabRows.push([]); // blank spacing row
+      
+      // Table Header Rows
+      rabRows.push([
+        "No",
+        "Uraian / Deskripsi Pekerjaan Fisik & Spesifikasi Bahan Baku",
+        "Volume Kerja",
+        "Satuan",
+        "Harga Satuan Jual (RAB / Rp)",
+        "Jumlah Harga Jual (RAB / Rp)",
+        "Biaya Satuan Pokok Bahan (RAP / Rp)",
+        "Jumlah Pokok Bahan (RAP / Rp)",
+        "Estimasi Margin Keuntungan (Laba / Rp)",
+        "Overhead & Profit %"
+      ]);
+      
+      let overallRABTotal = 0;
+      let overallRAPTotal = 0;
+      let overallMarginTotal = 0;
+
+      // Group Loop
+      Object.keys(itemsByGroup).forEach((groupName, gIdx) => {
+        const groupRows = itemsByGroup[groupName];
+        if (groupRows.length === 0) return;
+        const totals = calculateCategoryTotals(groupRows);
+        
+        overallRABTotal += totals.totalJumlahHarga;
+        overallRAPTotal += totals.totalRapBahan;
+        overallMarginTotal += totals.totalMarginNominal;
+        
+        // Group Header Row
+        rabRows.push([
+          String.fromCharCode(65 + gIdx),
+          groupName.toUpperCase(),
+          "",
+          "",
+          "",
+          totals.totalJumlahHarga,
+          "",
+          totals.totalRapBahan,
+          totals.totalMarginNominal,
+          `${totals.averageMarginPct.toFixed(1)}%`
+        ]);
+        
+        // Items Loop Under Group
+        groupRows.forEach((item, rIdx) => {
+          const assignedAhsp = fullAhspDatabase.find(a => a.id === item.assignedAhspId);
+          const itemMarginPct = item.marginPct !== undefined ? item.marginPct : globalMarginPct;
+          
+          let rapBahanUnit = 0;
+          if (assignedAhsp) {
+            assignedAhsp.coefficients.forEach((coef) => {
+              const comp = fullComponentsDatabase.find(c => c.id === coef.componentId);
+              if (comp && comp.category === "bahan") {
+                rapBahanUnit += coef.coefficient * (comp.defaultPrice || 0);
+              }
+            });
+          }
+          
+          const unitCost = rapBahanUnit;
+          const sellingUnitPrice = unitCost * (1 + itemMarginPct / 100);
+          
+          const jumlahHargaSelling = sellingUnitPrice * item.volume;
+          const rapBahanJumlah = rapBahanUnit * item.volume;
+          const marginNominalJumlah = (sellingUnitPrice - unitCost) * item.volume;
+          
+          // Item data row (numeric values are exported as real numbers for spreadsheet formulas to work seamlessly)
+          rabRows.push([
+            rIdx + 1,
+            item.rawName + (item.specification ? ` (${item.specification})` : ""),
+            item.volume,
+            item.unit,
+            sellingUnitPrice,
+            jumlahHargaSelling,
+            unitCost,
+            rapBahanJumlah,
+            marginNominalJumlah,
+            `${itemMarginPct}%`
+          ]);
+          
+          // Child coefficients breakdown loop
+          if (assignedAhsp) {
+            assignedAhsp.coefficients.forEach((coef) => {
+              const comp = fullComponentsDatabase.find(c => c.id === coef.componentId);
+              if (comp && comp.category === "bahan") {
+                const componentQuantity = coef.coefficient * item.volume;
+                const componentPrice = comp.defaultPrice || 0;
+                const componentSum = componentQuantity * componentPrice;
+                
+                rabRows.push([
+                  "",
+                  `    └─ ${comp.name} [Coef: ${coef.coefficient}]`,
+                  componentQuantity,
+                  comp.unit,
+                  "",
+                  "",
+                  componentPrice,
+                  componentSum,
+                  "",
+                  ""
+                ]);
+              }
+            });
+          }
+        });
+        
+        rabRows.push([]); // spacing row between groups
+      });
+      
+      // Grand total Row
+      rabRows.push([
+        "T-TOTAL",
+        "REKAPITULASI TOTAL SELURUH PEKERJAAN",
+        "",
+        "",
+        "",
+        overallRABTotal,
+        "",
+        overallRAPTotal,
+        overallMarginTotal,
+        overallRABTotal > 0 ? `${((overallMarginTotal / overallRABTotal) * 100).toFixed(1)}%` : "0%"
+      ]);
+      
+      // Building SheetJS materials
+      const wb = XLSX.utils.book_new();
+      const wsRab = XLSX.utils.aoa_to_sheet(rabRows);
+      
+      // Apply professional sizing/widths for easy reading
+      wsRab["!cols"] = [
+        { wch: 6 },   // No
+        { wch: 55 },  // Uraian Deskripsi
+        { wch: 15 },  // Volume Kerja
+        { wch: 10 },  // Satuan
+        { wch: 22 },  // Harga Jual Unit
+        { wch: 24 },  // Jumlah Jual
+        { wch: 22 },  // RAP Cost Unit
+        { wch: 24 },  // RAP Cost Jumlah
+        { wch: 24 },  // Margin Laba
+        { wch: 12 },  // Margin Pct
+      ];
+      
+      XLSX.utils.book_append_sheet(wb, wsRab, "Analisis RAB & RAP");
+      
+      // Sheet 2: Material Requirement Lists
+      const materialRows: any[] = [];
+      materialRows.push(["DAFTAR KESELURUHAN REKAPITULASI MATERIAL / BAHAN MURNI PROYEK"]);
+      materialRows.push([`Nama File Sumber BoQ: ${file?.name || "Desain Rencana Manual"}`]);
+      materialRows.push([`Waktu Pembuatan Laporan: ${new Date().toLocaleString("id-ID")}`]);
+      materialRows.push([]); // spacing
+      materialRows.push(["No", "Nama Bahan / Material Utama Konstruksi", "Volume Kuantitas Murni", "Satuan"]);
+      
+      const mainBahan = compiledProjectMaterials.filter(m => m.category === "bahan");
+      mainBahan.forEach((material, idx) => {
+        materialRows.push([
+          idx + 1,
+          material.name,
+          material.quantity,
+          material.unit
+        ]);
+      });
+      
+      const wsMat = XLSX.utils.aoa_to_sheet(materialRows);
+      wsMat["!cols"] = [
+        { wch: 6 },   // No
+        { wch: 55 },  // Nama Bahan
+        { wch: 24 },  // Volume Kuantitas
+        { wch: 12 },  // Satuan
+      ];
+      
+      XLSX.utils.book_append_sheet(wb, wsMat, "Rekap Kebutuhan Material");
+      
+      // Save Workbook
+      const sanitizedName = file?.name ? file.name.substring(0, file.name.lastIndexOf('.')) : "Desain_Rencana";
+      const saveFileName = `Hasil_Analisa_Volume_Pintar_${sanitizedName.replace(/[^a-zA-Z0-9_\-]/g, "_")}.xlsx`;
+      
+      XLSX.writeFile(wb, saveFileName);
+    } catch (err: any) {
+      console.error("Gagal mengunduh spreadsheet:", err);
+      alert("Gagal mengunduh spreadsheet: " + (err.message || err));
     }
   };
 
@@ -994,13 +1212,20 @@ export default function RabDocumentCompiler({
                     </div>
                   </div>
 
-                  <div className="pt-3 border-t border-slate-200">
+                  <div className="pt-3 border-t border-slate-200 space-y-2 flex flex-col">
                     <button
                       onClick={() => window.print()}
-                      className="w-full py-2 bg-slate-900 text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 hover:bg-slate-800 transition cursor-pointer"
+                      className="w-full py-2.5 bg-slate-900 text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 hover:bg-slate-800 transition cursor-pointer"
                     >
                       <Download className="w-4 h-4" />
                       Cetak Laporan Kuantitas
+                    </button>
+                    <button
+                      onClick={handleExportSpreadsheet}
+                      className="w-full py-2.5 bg-emerald-605 text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 hover:bg-emerald-700 transition cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" />
+                      Unduh Spreadsheet Excel (.xlsx)
                     </button>
                   </div>
                 </div>
@@ -1017,26 +1242,39 @@ export default function RabDocumentCompiler({
                 <p className="text-[11px] text-slate-500 font-medium">Beban margin keuntungan ditambahkan ke harga pokok murni bahan & tenaga kerja untuk menghitung nilai jual penawaran.</p>
               </div>
               
-              <div className="flex items-center gap-3 font-semibold">
-                <input 
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={globalMarginPct}
-                  onChange={(e) => setGlobalMarginPct(Number(e.target.value))}
-                  className="w-48 cursor-pointer accent-blue-600"
-                />
-                <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-3 font-semibold">
                   <input 
-                    type="number"
+                    type="range"
                     min="0"
-                    max="150"
+                    max="100"
+                    step="1"
                     value={globalMarginPct}
-                    onChange={(e) => setGlobalMarginPct(Math.max(0, parseFloat(e.target.value) || 0))}
-                    className="w-18 text-xs font-bold border border-slate-300 rounded-xl p-2 text-center bg-white"
+                    onChange={(e) => setGlobalMarginPct(Number(e.target.value))}
+                    className="w-48 cursor-pointer accent-blue-600"
                   />
-                  <span className="text-xs font-extrabold text-slate-850">%</span>
+                  <div className="flex items-center gap-1.5">
+                    <input 
+                      type="number"
+                      min="0"
+                      max="150"
+                      value={globalMarginPct}
+                      onChange={(e) => setGlobalMarginPct(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="w-18 text-xs font-bold border border-slate-300 rounded-xl p-2 text-center bg-white"
+                    />
+                    <span className="text-xs font-extrabold text-slate-850">%</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center border-l pl-4 border-slate-200">
+                  <button
+                    onClick={handleExportSpreadsheet}
+                    className="py-2.5 px-4 bg-emerald-605 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 hover:bg-emerald-700 active:scale-95 transition cursor-pointer shadow-sm border border-emerald-700/10"
+                    title="Ekspor seluruh analisa ke format Excel (.xlsx)"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-50 shrink-0" />
+                    Unduh file Excel (.xlsx)
+                  </button>
                 </div>
               </div>
             </div>
